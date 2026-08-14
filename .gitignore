@@ -19,6 +19,8 @@ allure-report/
 *.swp
 *.swo
 
+
+
 # Virtual Environment
 venv/
 env/
