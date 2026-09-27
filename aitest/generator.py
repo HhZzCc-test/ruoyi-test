@@ -162,14 +162,19 @@ class CaseGenerator:
                 precondition=str(rc.get("precondition") or ""),
                 steps=[str(s) for s in (rc.get("steps") or [])],
                 request_data=rc.get("request_data") or {},
+                method_override=rc.get("method_override") or None,
+                header_overrides=rc.get("header_overrides") or {},
+                path_params=rc.get("path_params") or {},
                 expected=str(rc.get("expected") or ""),
                 assertions=[str(a) for a in (rc.get("assertions") or [])],
                 source="ai",
                 module=endpoint.module,
             )
             stats.cases_generated += 1
-            # 生成阶段不校验 case_id：ID 在去重后由 renumber() 统一分配
-            problems = case_rules.validate_case(case, require_case_id=False)
+            # 生成阶段不校验 case_id（ID 在去重后由 renumber() 统一分配），
+            # 但传入 endpoint 启用上下文校验（拦住臆造字段，见 case_rules 文档）
+            problems = case_rules.validate_case(case, require_case_id=False,
+                                                endpoint=endpoint)
             if problems:
                 stats.cases_invalid += 1
                 case.diagnostics.extend(problems)

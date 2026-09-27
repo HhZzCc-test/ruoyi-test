@@ -141,6 +141,12 @@ class TestCase:
     assertions: List[str] = field(default_factory=list)
     source: str = "ai"            # ai | human | ai+human
     module: str = ""
+    # ---- 请求维度覆盖（真实模型生成过「换用不支持的 HTTP 方法」这类用例，
+    #      而 request_data 只能表达请求体，表达不了方法与请求头维度）----
+    method_override: Optional[str] = None          # 覆盖 HTTP 方法，如 "PUT"
+    header_overrides: Dict[str, str] = field(default_factory=dict)
+    #                                               值为 "" 表示移除该请求头（如去掉 Authorization）
+    path_params: Dict[str, Any] = field(default_factory=dict)   # 路径参数，与 request_data 分开
     # 校验/去重过程中写入的诊断信息，不进入交付文档
     diagnostics: List[str] = field(default_factory=list)
 
@@ -150,8 +156,16 @@ class TestCase:
                     and self.case_type in CASE_TYPES and self.priority in PRIORITIES)
 
     def signature(self) -> str:
-        """用于去重的语义指纹：同接口 + 同类型 + 同请求数据 + 同预期。"""
-        payload = json.dumps(self.request_data, sort_keys=True, ensure_ascii=False)
+        """用于去重的语义指纹：同接口 + 同类型 + 同请求 + 同预期。
+
+        请求维度覆盖必须一起进指纹，否则「换 PUT 方法」的用例会被误判成
+        与同接口的 GET 正常用例重复而丢掉。
+        """
+        payload = json.dumps({"data": self.request_data,
+                              "path": self.path_params,
+                              "method": self.method_override,
+                              "headers": self.header_overrides},
+                             sort_keys=True, ensure_ascii=False)
         return "|".join([self.endpoint, self.case_type, payload, self.expected.strip()])
 
     def to_dict(self) -> Dict[str, Any]:

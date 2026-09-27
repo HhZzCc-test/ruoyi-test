@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from aitest.models import CASE_TYPES, PRIORITIES, Endpoint, TestCase
 
@@ -22,12 +22,21 @@ _MEANINGFUL_ASSERT_HINTS = (
     "length", "type", "unique", "elapsed", "字段",
 )
 
+# method_override 允许的取值
+_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS")
 
-def validate_case(case: TestCase, require_case_id: bool = True) -> List[str]:
+
+def validate_case(case: TestCase, require_case_id: bool = True,
+                  endpoint: Optional[Endpoint] = None) -> List[str]:
     """返回问题列表；空列表表示通过。
 
     ``require_case_id=False`` 用于生成阶段：此时用例 ID 由
     :func:`renumber` 在去重后统一分配，不应因「缺 ID」把草稿判为不合格。
+
+    ``endpoint`` 提供时启用**上下文校验**：用例里出现的字段名必须真实存在于
+    该接口文档中。这条规则来自一次真实教训 —— 模型给无参数的
+    ``GET /captchaImage`` 生成了 ``request_data={"unexpected": "data"}``，
+    只有拿到接口元数据才可能拦住这种「臆造字段」。
     """
     problems: List[str] = []
     if require_case_id and not case.case_id:
@@ -48,8 +57,24 @@ def validate_case(case: TestCase, require_case_id: bool = True) -> List[str]:
         joined = " ".join(case.assertions).lower()
         if not any(h.lower() in joined for h in _MEANINGFUL_ASSERT_HINTS):
             problems.append("断言未涉及业务字段，存在假绿灯风险")
-    if case.case_type == "exception" and not case.request_data:
-        problems.append("异常用例未给出具体请求数据")
+    # 异常用例必须给出「具体的畸形输入」：请求体 / 方法覆盖 / 请求头覆盖 三者之一
+    if case.case_type == "exception" and not (case.request_data or case.method_override
+                                              or case.header_overrides):
+        problems.append("异常用例未给出具体畸形输入")
+    # 请求维度覆盖的合法性
+    if case.method_override is not None and \
+            str(case.method_override).upper() not in _HTTP_METHODS:
+        problems.append("method_override 非法: %s" % case.method_override)
+    if not isinstance(case.header_overrides, dict):
+        problems.append("header_overrides 必须是对象")
+    if not isinstance(case.path_params, dict):
+        problems.append("path_params 必须是对象")
+    # 上下文校验：字段必须真实存在于接口文档（防臆造）
+    if endpoint is not None:
+        allowed = {p.name for p in endpoint.params}
+        bogus = sorted((set(case.request_data) | set(case.path_params)) - allowed)
+        if bogus:
+            problems.append("字段不在接口文档中: %s" % ", ".join(bogus))
     return problems
 
 

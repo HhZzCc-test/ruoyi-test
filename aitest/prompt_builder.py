@@ -95,6 +95,8 @@ def build_prompt(endpoint: Endpoint,
         "- 边界值必须来自接口文档中的真实约束；文档没给约束时按常见约定并在 precondition 说明假设\n"
         "- 异常用例要给出具体的畸形数据，不要写「传错误参数」这类空话\n"
         "- request_data 的键必须是接口文档中真实存在的字段\n"
+        "- 要测请求维度（HTTP 方法 / 请求头）上的异常，用 method_override / "
+        "header_overrides 表达，不要塞进 request_data\n"
         "- 每个接口最多 1 条仅校验 HTTP 200 的用例")
     if extra_rules:
         blocks.append("## 四、额外要求\n\n" + "\n".join("- %s" % r for r in extra_rules))

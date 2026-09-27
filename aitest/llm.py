@@ -308,20 +308,38 @@ class MockProvider:
                            "字段长度符合约束"],
         })
 
-        target = required[0].name if required else (ep.params[0].name if ep.params else "id")
-        bad = dict(sample)
-        bad[target] = None
-        out.append({
-            "title": "%s - 异常: %s 缺失" % (ep.summary or ep.key, target),
-            "case_type": "exception",
-            "priority": "P1",
-            "precondition": "服务正常运行",
-            "steps": ["将 %s 置为缺失" % target, "发送请求", "校验被拒绝"],
-            "request_data": bad,
-            "expected": "请求被拒绝，业务 code 非 200 且提示参数缺失",
-            "assertions": ["HTTP 状态码为 200（业务层返回错误）",
-                           "业务 code 不等于 200", "msg 字段包含参数提示"],
-        })
+        if ep.params:
+            target = required[0].name if required else ep.params[0].name
+            bad = dict(sample)
+            bad[target] = None
+            out.append({
+                "title": "%s - 异常: %s 缺失" % (ep.summary or ep.key, target),
+                "case_type": "exception",
+                "priority": "P1",
+                "precondition": "服务正常运行",
+                "steps": ["将 %s 置为缺失" % target, "发送请求", "校验被拒绝"],
+                "request_data": bad,
+                "expected": "请求被拒绝，业务 code 非 200 且提示参数缺失",
+                "assertions": ["HTTP 状态码为 200（业务层返回错误）",
+                               "业务 code 不等于 200", "msg 字段包含参数提示"],
+            })
+        else:
+            # 无参数接口没有可缺失的字段，异常场景只能落在「请求维度」上：
+            # 用不支持的 HTTP 方法（由 method_override 表达，不臆造 request_data 字段）
+            bad_method = "POST" if ep.method.upper() != "POST" else "GET"
+            out.append({
+                "title": "%s - 异常: 使用不支持的 HTTP 方法 %s"
+                         % (ep.summary or ep.key, bad_method),
+                "case_type": "exception",
+                "priority": "P1",
+                "precondition": "该接口仅允许 %s 方法" % ep.method.upper(),
+                "steps": ["改用 %s 方法请求该接口" % bad_method, "校验被拒绝"],
+                "request_data": {},
+                "method_override": bad_method,
+                "expected": "请求被拒绝，返回 405 或业务 code 非 200",
+                "assertions": ["HTTP 状态码为 405 或业务 code 非 200",
+                               "msg 提示方法不允许"],
+            })
 
         if ep.need_auth:
             out.append({

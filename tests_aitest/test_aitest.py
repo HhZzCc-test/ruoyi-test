@@ -212,7 +212,42 @@ class TestCaseRules:
     def test_exception_case_needs_data(self):
         problems = case_rules.validate_case(
             self._case(case_type="exception", request_data={}))
-        assert any("异常用例未给出具体请求数据" in p for p in problems)
+        assert any("异常用例未给出具体畸形输入" in p for p in problems)
+
+    def test_exception_case_with_method_override_is_ok(self):
+        """无参数接口的异常场景用 method_override 表达，不算「没给畸形输入」。"""
+        problems = case_rules.validate_case(
+            self._case(case_type="exception", request_data={},
+                       method_override="PUT",
+                       assertions=["HTTP 状态码为 405 或业务 code 非 200"]))
+        assert not any("畸形输入" in p for p in problems), problems
+
+    def test_context_check_blocks_bogus_fields(self):
+        """★ 来自真实教训：无参数接口出现 request_data 字段必须被拦下。"""
+        endpoints = parse_swagger(load_spec(SPEC_PATH))
+        ep = [e for e in endpoints if e.key == "GET /captchaImage"][0]
+        assert ep.params == [], "该接口文档里确实没有参数"
+        c = self._case(case_type="exception", request_data={"unexpected": "data"},
+                       assertions=["HTTP 状态码为 405 或业务 code 非 200"])
+        assert not case_rules.validate_case(c), "不传 endpoint 时检查不到（无上下文）"
+        problems = case_rules.validate_case(c, endpoint=ep)
+        assert any("字段不在接口文档中" in p for p in problems), problems
+        # 文档里真实存在的字段不应被误伤
+        ep2 = [e for e in endpoints if e.key == "POST /login"][0]
+        good = self._case(case_type="exception", request_data={"username": None})
+        assert not case_rules.validate_case(good, endpoint=ep2)
+
+    def test_illegal_method_override_is_blocked(self):
+        problems = case_rules.validate_case(self._case(method_override="FETCH"))
+        assert any("method_override 非法" in p for p in problems)
+
+    def test_signature_includes_request_dimensions(self):
+        """换方法的用例不能与同接口正常用例被判为重复而丢掉。"""
+        a = self._case(case_id="TC-A-001", request_data={})
+        b = self._case(case_id="TC-A-002", request_data={}, method_override="PUT")
+        c = self._case(case_id="TC-A-003", request_data={},
+                       header_overrides={"Authorization": ""})
+        assert len({a.signature(), b.signature(), c.signature()}) == 3
 
     def test_dedupe_removes_semantic_duplicates(self):
         a = self._case(case_id="TC-A-001", request_data={"x": 1})

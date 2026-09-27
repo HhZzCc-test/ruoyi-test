@@ -131,6 +131,14 @@ def render_module(cases: Sequence[TestCase], module: str,
                 out.append("        # 前置条件: %s" % case.precondition)
             out.append("        # TODO 按实际客户端方法名对齐请求调用")
             out.append("        # 请求数据: %s" % _py_literal(case.request_data))
+            if case.method_override:
+                out.append("        # 请求方法覆盖: %s（用于测方法不允许等场景）"
+                           % case.method_override)
+            if case.header_overrides:
+                out.append("        # 请求头覆盖: %s（值为空字符串表示移除该请求头）"
+                           % _py_literal(case.header_overrides))
+            if case.path_params:
+                out.append("        # 路径参数: %s" % _py_literal(case.path_params))
             out.append("        resp = None  # e.g. self.client.get_user_list(params=...)")
             out.append("")
             out.append('        with allure.step("发送请求"):')
