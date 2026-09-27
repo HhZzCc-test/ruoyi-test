@@ -1,0 +1,121 @@
+name: CI
+
+# 说明：
+#   offline  —— aitest 模块单测 + 生成流水线自检，不需要被测服务，任何提交都跑
+#   coverage —— 用 pytest-cov 统计 aitest 自身覆盖率（不依赖若依服务）
+#   live     —— 针对真实若依服务的接口/UI 回归，仅在手动触发或配置了服务时运行
+
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: "是否运行需要真实若依服务的接口回归"
+        type: boolean
+        default: false
+
+jobs:
+  offline:
+    name: aitest 单测与生成自检（离线）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov
+
+      - name: aitest 模块单测
+        run: python -m pytest tests_aitest -q -p no:cacheprovider
+
+      - name: 生成流水线自检（mock 模式，无需 API Key）
+        run: |
+          python -m aitest parse --spec specs/ruoyi-openapi.json
+          python -m aitest generate --spec specs/ruoyi-openapi.json \
+            --provider mock --out-dir reports/ai
+
+      - name: 断言生成结果可用
+        run: |
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("reports/ai/cases.json", encoding="utf-8"))
+          cases, stats = data["cases"], data["stats"]
+          cov = data["coverage"]
+          print("用例数:", len(cases))
+          print("统计:", json.dumps(stats, ensure_ascii=False))
+          assert len(cases) > 0, "未生成任何用例"
+          assert stats["cases_invalid"] == 0, "存在不合格草稿: %s" % stats["invalid_reasons"]
+          assert cov["endpoint_coverage"] == 100.0, "接口覆盖不足: %s" % cov
+          types = cov["case_by_type"]
+          for t in ("normal", "boundary", "exception"):
+              assert types.get(t), "缺少 %s 类型用例" % t
+          print("生成自检通过")
+          PY
+
+      - name: 上传生成产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-testcases
+          path: reports/ai/
+          if-no-files-found: warn
+
+  coverage:
+    name: 覆盖率（pytest-cov）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest-cov
+
+      - name: 运行单测并统计覆盖率
+        run: |
+          python -m pytest tests_aitest -q -p no:cacheprovider \
+            --cov=aitest --cov-report=term-missing \
+            --cov-report=xml:coverage.xml --cov-fail-under=70
+
+      - name: 上传覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: warn
+
+  live:
+    name: 真实服务接口回归（可选）
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 说明
+        run: |
+          echo "该作业需要可访问的若依后端(:18080)与 Redis(:6379)。"
+          echo "在本仓库中默认不启动，避免因外部依赖导致 CI 不稳定。"
+          echo "如需启用，请在 runner 上先拉起服务，再放开下面的 pytest 步骤。"
+      # - name: 运行接口回归
+      #   env:
+      #     BASE_URL: http://localhost:18080
+      #   run: python -m pytest tests -m smoke
