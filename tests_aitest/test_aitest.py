@@ -4,6 +4,7 @@
 运行:
     pytest tests_aitest -v
 """
+import io
 import json
 import os
 import sys
@@ -335,6 +336,119 @@ class TestLLMParsing:
         parts = build_prompt(ep, default_knowledge_base())
         payload = extract_json(provider.complete(parts.system, parts.user))
         assert payload["cases"], "mock 应至少生成一条用例"
+
+
+# ----------------------------------------------------------------------
+# pytest 骨架生成
+# ----------------------------------------------------------------------
+class TestDeepSeekProvider:
+    """DeepSeek provider（OpenAI 兼容接口）：全部离线测试，_post 被 monkeypatch。"""
+
+    def _provider(self, **kw):
+        from aitest.llm import DeepSeekProvider
+        kw.setdefault("api_key", "test-key")
+        return DeepSeekProvider(**kw)
+
+    @staticmethod
+    def _canned(content='{"cases": []}', prompt=100, completion=50):
+        return {"choices": [{"message": {"role": "assistant", "content": content}}],
+                "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
+
+    def test_requires_api_key(self, monkeypatch):
+        from aitest.llm import DeepSeekProvider
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        with pytest.raises(RuntimeError) as e:
+            DeepSeekProvider()
+        assert "DEEPSEEK_API_KEY" in str(e.value)
+
+    def test_payload_shape(self):
+        p = self._provider()
+        payload = p._payload("sys", "user", 1234)
+        assert payload["model"] == "deepseek-chat"
+        assert payload["max_tokens"] == 1234
+        assert payload["stream"] is False
+        assert payload["messages"] == [{"role": "system", "content": "sys"},
+                                       {"role": "user", "content": "user"}]
+        # 下游依赖严格 JSON，默认要开 JSON 模式
+        assert payload["response_format"] == {"type": "json_object"}
+
+    def test_payload_can_disable_json_mode(self):
+        p = self._provider(json_mode=False)
+        assert "response_format" not in p._payload("s", "u", 10)
+
+    def test_complete_parses_content_and_accumulates_usage(self, monkeypatch):
+        p = self._provider()
+        calls = []
+        canned = self._canned
+
+        def fake_post(self_, payload):
+            calls.append(payload)
+            return canned('{"cases": [1]}', 120, 30)
+
+        monkeypatch.setattr(type(p), "_post", fake_post)
+        out = p.complete("s", "u")
+        assert out == '{"cases": [1]}'
+        assert len(calls) == 1
+        assert p.usage == {"calls": 1, "prompt_tokens": 120, "completion_tokens": 30}
+        p.complete("s", "u")
+        assert p.usage["calls"] == 2 and p.usage["prompt_tokens"] == 240
+
+    def test_retries_without_json_mode_on_400(self, monkeypatch):
+        import urllib.error
+        p = self._provider()
+        seen = []
+        canned = self._canned
+
+        def fake_post(self_, payload):
+            seen.append(payload)
+            if len(seen) == 1:
+                raise urllib.error.HTTPError(
+                    "http://x", 400, "Bad Request", {},
+                    io.BytesIO('{"error":"response_format is not supported"}'.encode()))
+            return canned()
+
+        monkeypatch.setattr(type(p), "_post", fake_post)
+        p.complete("s", "u")
+        assert len(seen) == 2
+        assert "response_format" in seen[0]
+        assert "response_format" not in seen[1], "第二次应去掉 JSON 模式再试"
+
+    def test_other_http_errors_are_raised(self, monkeypatch):
+        import urllib.error
+        p = self._provider()
+
+        def fake_post(self_, payload):
+            raise urllib.error.HTTPError("http://x", 401, "Unauthorized", {},
+                                         io.BytesIO(b'{"error":"invalid key"}'))
+
+        monkeypatch.setattr(type(p), "_post", fake_post)
+        with pytest.raises(RuntimeError) as e:
+            p.complete("s", "u")
+        assert "HTTP 401" in str(e.value)
+
+    def test_empty_choices_raises(self, monkeypatch):
+        p = self._provider()
+        monkeypatch.setattr(type(p), "_post",
+                            lambda self, payload: {"choices": [], "usage": {}})
+        with pytest.raises(RuntimeError) as e:
+            p.complete("s", "u")
+        assert "choices" in str(e.value)
+
+    def test_get_provider_selects_by_key(self, monkeypatch):
+        from aitest.llm import get_provider
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert get_provider().name == "mock", "都没 Key 时应降级 mock"
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        p = get_provider()
+        assert p.name == "deepseek"
+        assert p.model == "deepseek-chat", "model=None 不能把默认模型顶掉"
+
+    def test_explicit_provider_does_not_silently_downgrade(self, monkeypatch):
+        from aitest.llm import get_provider
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        with pytest.raises(RuntimeError):
+            get_provider(prefer="deepseek")
 
 
 # ----------------------------------------------------------------------

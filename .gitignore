@@ -21,8 +21,14 @@ failures/
 log/
 
 # 本地密钥（绝不入库）
+# 注意：provider key 文件按 ".<厂商>_key" 命名，下划线不是点，
+# 所以 *.key 这类通配匹配不到，必须用 .*_key 覆盖
 .env
+.env.*
 .anthropic_key
+.deepseek_key
+.*_key
+*_key.txt
 *.key
 *.pem
 

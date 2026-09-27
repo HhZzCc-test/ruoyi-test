@@ -47,6 +47,9 @@ class GenerationStats:
     llm_failures: int = 0
     provider: str = ""
     duration_sec: float = 0.0
+    # token 用量（provider 支持时记录，用于回答「跑一次多少钱」）
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     invalid_reasons: Dict[str, int] = field(default_factory=dict)
     files_written: List[str] = field(default_factory=list)
     # 模型彻底失败（重试后仍拿不到 JSON）的接口，必须留下接口名而不是只留计数，
@@ -75,6 +78,9 @@ class GenerationStats:
         )
         if self.endpoints_failed:
             text += "；未生成用例的接口 %d 个，需人工补写" % len(self.endpoints_failed)
+        if self.prompt_tokens or self.completion_tokens:
+            text += "；token 输入 %d / 输出 %d" % (self.prompt_tokens,
+                                                  self.completion_tokens)
         return text
 
 
@@ -171,6 +177,11 @@ class CaseGenerator:
         for ep in targets:
             collected.extend(self.generate_for_endpoint(ep, stats))
             stats.endpoints_processed += 1
+
+        # provider 支持用量统计时（DeepSeek / Claude）把 token 消耗带进报告
+        usage = getattr(self.provider, "usage", None) or {}
+        stats.prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        stats.completion_tokens = int(usage.get("completion_tokens") or 0)
 
         kept, dropped = case_rules.dedupe(collected)
         stats.cases_duplicated = len(dropped)

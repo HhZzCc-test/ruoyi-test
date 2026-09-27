@@ -8,6 +8,8 @@ PyYAML>=6.0
 # aitest 模块（AI 辅助用例生成）依赖
 #   anthropic 仅在真实调用 Claude API 时需要；未安装或缺 Key 时
 #   aitest 会自动降级为离线 mock provider，CI 与本地开发无需 Key 也可跑通
+#   DeepSeek 走 OpenAI 兼容的 HTTP 接口，只用标准库 urllib 实现，
+#   因此不需要额外安装任何 SDK（配好 DEEPSEEK_API_KEY 即可用）
 anthropic>=0.40.0
 
 # 覆盖率

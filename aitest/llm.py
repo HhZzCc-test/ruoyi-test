@@ -1,27 +1,40 @@
 # -*- coding: utf-8 -*-
 """可插拔的大模型层。
 
+- :class:`DeepSeekProvider` —— 调用 DeepSeek（OpenAI 兼容 /chat/completions），
+  **只用标准库 urllib**，不给项目增加任何新依赖。
 - :class:`ClaudeProvider` —— 调用 Claude API（Anthropic SDK），提示词按
   「业务背景 + 约束 + 示例 + 输出要求」组织，并要求返回严格 JSON。
 - :class:`MockProvider` —— 离线确定性实现，不需要 API Key，
   用于单元测试与无网络环境验证整条流水线。
 
+三个实现都满足 :class:`LLMProvider` 协议，所以加一个模型厂商不需要改动
+生成器、规则层或归因器中的任何一行。
+
 环境变量：
-    ANTHROPIC_API_KEY   有则使用 ClaudeProvider
-    AITEST_MODEL        模型名，默认 claude-sonnet-4-5
-    AITEST_BASE_URL     自定义网关地址（可选）
+    DEEPSEEK_API_KEY           有则可用 DeepSeekProvider（auto 模式下优先）
+    ANTHROPIC_API_KEY          有则可用 ClaudeProvider
+    AITEST_MODEL               模型名，默认 claude-sonnet-4-5（Claude 用）
+    AITEST_BASE_URL            自定义网关地址（可选，Claude 用）
+    AITEST_DEEPSEEK_MODEL      DeepSeek 模型名，默认 deepseek-chat
+    AITEST_DEEPSEEK_BASE_URL   DeepSeek 网关地址，默认 https://api.deepseek.com
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from typing import Any, Dict, List, Optional, Protocol
 
 from aitest.models import Endpoint, TestCase
 from aitest.prompts import JSON_CONTRACT, SYSTEM_PROMPT  # noqa: F401  (对外复用)
 
 DEFAULT_MODEL = os.environ.get("AITEST_MODEL", "claude-sonnet-4-5")
+DEFAULT_DEEPSEEK_MODEL = os.environ.get("AITEST_DEEPSEEK_MODEL", "deepseek-chat")
+DEFAULT_DEEPSEEK_BASE_URL = os.environ.get("AITEST_DEEPSEEK_BASE_URL",
+                                           "https://api.deepseek.com")
 
 
 class LLMProvider(Protocol):
@@ -90,11 +103,94 @@ class ClaudeProvider:
         return "\n".join(parts)
 
 
+class DeepSeekProvider:
+    """调用 DeepSeek（OpenAI 兼容接口），只用标准库，不新增依赖。
+
+    与 ClaudeProvider 的差别只有「怎么把提示词发出去」：
+    两者都满足 LLMProvider 协议，上层流水线完全不感知厂商差异。
+
+    - 走 ``POST {base_url}/chat/completions``，``Authorization: Bearer <key>``
+    - 默认开启 JSON 模式（``response_format={"type": "json_object"}``），
+      因为整条流水线的下游依赖严格 JSON；遇到不支持的网关会自动去掉该参数重试一次
+    - 累计 ``usage``（token 用量），用于回答「跑一次多少钱」
+    """
+
+    name = "deepseek"
+
+    def __init__(self, model: Optional[str] = None, api_key: Optional[str] = None,
+                 base_url: Optional[str] = None, temperature: float = 0.2,
+                 timeout: int = 180, json_mode: bool = True):
+        key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "缺少 API Key：请设置环境变量 DEEPSEEK_API_KEY，"
+                "或改用 MockProvider 离线跑通流程")
+        self.model = model or DEFAULT_DEEPSEEK_MODEL
+        self.base_url = (base_url or DEFAULT_DEEPSEEK_BASE_URL).rstrip("/")
+        self.temperature = temperature
+        self.timeout = timeout
+        self.json_mode = json_mode
+        self._key = key
+        self.usage: Dict[str, int] = {"calls": 0, "prompt_tokens": 0,
+                                      "completion_tokens": 0}
+
+    # ------------------------------------------------------------------
+    def _payload(self, system: str, user: str, max_tokens: int,
+                 json_mode: Optional[bool] = None) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "max_tokens": max_tokens,
+            "temperature": self.temperature,
+            "stream": False,
+        }
+        if self.json_mode if json_mode is None else json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
+    def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """真正的网络调用（单独成方法，便于单测 monkeypatch，不联网也能测）。"""
+        req = urllib.request.Request(
+            self.base_url + "/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer %s" % self._key})
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def complete(self, system: str, user: str, max_tokens: int = 4000) -> str:
+        try:
+            data = self._post(self._payload(system, user, max_tokens))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:300]
+            if e.code == 400 and "response_format" in detail:
+                # 少数兼容网关不支持 JSON 模式：去掉该参数再试一次
+                data = self._post(self._payload(system, user, max_tokens,
+                                                json_mode=False))
+            else:
+                raise RuntimeError("DeepSeek 调用失败 HTTP %s: %s"
+                                   % (e.code, detail)) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError("DeepSeek 网络不可达: %s" % e.reason) from e
+
+        usage = data.get("usage") or {}
+        self.usage["calls"] += 1
+        self.usage["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+        self.usage["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError("DeepSeek 响应里没有 choices: %s" % str(data)[:200])
+        return str((choices[0].get("message") or {}).get("content") or "")
+
+
 class MockProvider:
     """离线确定性实现：按接口元数据与规则生成草稿，供无 Key 环境验证流水线。
 
     它不替代真实模型，但能保证 CI 与单测不依赖外部网络。
-    生成质量刻意做得「中等」——真正的价值由 ClaudeProvider 提供。
+    生成质量刻意做得「中等」——真正的价值由 DeepSeekProvider / ClaudeProvider 提供。
     """
 
     name = "mock"
@@ -227,16 +323,32 @@ class MockProvider:
 
 
 def get_provider(endpoints: Optional[List[Endpoint]] = None,
-                 prefer: str = "auto", model: str = DEFAULT_MODEL) -> LLMProvider:
+                 prefer: str = "auto",
+                 model: Optional[str] = None) -> LLMProvider:
     """选择可用的大模型实现。
 
-    prefer: ``auto`` | ``claude`` | ``mock``
+    prefer: ``auto`` | ``deepseek`` | ``claude`` | ``mock``
+
+    - 显式指定 ``deepseek`` / ``claude`` 时，缺 Key 直接抛错（不静默降级，
+      否则「以为在用真模型，其实在用 mock」是最坏的情况）
+    - ``auto`` 按「谁配了 Key 用谁」选择，DeepSeek 优先（成本低、国内可达）；
+      都没配则降级为离线 mock，保证 CI 与本地开发可跑通
+    - ``model`` 为 None 时各 provider 用自己的默认模型名（不要把 None 传下去）
     """
     if prefer == "mock":
         return MockProvider(endpoints)
-    try:
-        return ClaudeProvider(model=model)
-    except Exception:
-        if prefer == "claude":
-            raise
-        return MockProvider(endpoints)
+    if prefer == "deepseek":
+        return DeepSeekProvider(model=model)
+    if prefer == "claude":
+        return ClaudeProvider(model=model or DEFAULT_MODEL)
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        try:
+            return DeepSeekProvider(model=model)
+        except Exception:
+            pass
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            return ClaudeProvider(model=model or DEFAULT_MODEL)
+        except Exception:
+            pass
+    return MockProvider(endpoints)

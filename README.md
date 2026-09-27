@@ -53,7 +53,7 @@ Swagger / OpenAPI ─► 接口元数据 ─► 业务知识库检索(RAG) ─�
 | 要点 | 说明 |
 |---|---|
 | **AI 只出草稿** | 生成结果必须过 `case_rules.validate_case`（拦住「只断言 HTTP 200」这类假绿灯用例），再经人工评审才允许入库 |
-| **可插拔模型** | `LLMProvider` 协议 + `ClaudeProvider` + `MockProvider`；无 API Key 时自动降级为离线 mock，CI 与本地开发无需 Key |
+| **可插拔模型** | `LLMProvider` 协议 + `DeepSeekProvider`（OpenAI 兼容，仅用标准库）+ `ClaudeProvider` + `MockProvider`；无 API Key 时自动降级为离线 mock，CI 与本地开发无需 Key |
 | **提示词四要素** | 业务背景（知识库检索）+ 约束 + 示例（few-shot）+ 输出要求（严格 JSON 契约），见 `prompt_builder.py` |
 | **归因分三类** | 失败结论区分 **用例问题 / 环境问题 / 真实缺陷**，且明确「结论是假设，需用日志复现确认」 |
 | **规则预筛省调用** | 连接拒绝、Redis 不可用、401 等一眼可见的环境问题走规则判定，不浪费模型调用 |
@@ -88,26 +88,41 @@ pip install -r requirements.txt
 python -m aitest parse --spec specs/ruoyi-openapi.json
 
 # 2) 生成用例草稿（含规则校验、去重、覆盖度报告），并同时产出 pytest 骨架
-#    未设置 ANTHROPIC_API_KEY 时自动使用离线 mock
+#    未设置 DEEPSEEK_API_KEY / ANTHROPIC_API_KEY 时自动使用离线 mock
 python -m aitest generate --spec specs/ruoyi-openapi.json \
     --out-dir reports/ai --scaffold-dir tests_ai_generated
 
-# 3) 用真实模型生成（需先设置 Key）
-export ANTHROPIC_API_KEY=sk-ant-xxx          # Windows: set ANTHROPIC_API_KEY=...
+# 3) 用真实模型生成（推荐 DeepSeek：OpenAI 兼容、成本低、国内可达）
+set DEEPSEEK_API_KEY=sk-xxx                  # Linux/macOS: export DEEPSEEK_API_KEY=sk-xxx
+python -m aitest generate --spec specs/ruoyi-openapi.json --provider deepseek
+
+#    或使用 Claude
+set ANTHROPIC_API_KEY=sk-ant-xxx
 python -m aitest generate --spec specs/ruoyi-openapi.json --provider claude
 
+#    干跑：只打印最终提示词全文，不调用模型，适合调提示词/评审
+python -m aitest generate --spec specs/ruoyi-openapi.json --show-prompt --limit 1
+
 # 4) 对失败用例做归因（输入 pytest 的 junit xml）
-python -m aitest analyze --junit examples/junit-sample.xml --provider claude \
+python -m aitest analyze --junit examples/junit-sample.xml --provider deepseek \
     --out reports/ai/failure_report.md
 
 # 5) 单独查看覆盖度
 python -m aitest report --cases reports/ai/cases.json --spec specs/ruoyi-openapi.json
 ```
 
+> `--provider` 取值为 `auto` / `deepseek` / `claude` / `mock`。
+> `auto` 按「谁配了 Key 用谁」选择（DeepSeek 优先），都没配则降级离线 mock；
+> 显式指定 `deepseek` / `claude` 时缺 Key 会直接报错，**不静默降级**——
+> 「以为在用真模型，其实在用 mock」是最坏的情况。
+
 生成产物：
 - `reports/ai/cases.json` —— 机器可读（含 `stats` 生成统计与 `coverage` 覆盖度）
 - `reports/ai/cases.md` —— 人工评审用（含评审要点提示）
 - `tests_ai_generated/*.py` —— pytest 骨架，请求调用处留有需人工对齐的断点
+
+`stats` 里会记录 `provider`、`llm_calls` / `llm_failures`、`usable_rate`、
+`endpoints_failed`（模型失败的接口名与原因）以及 token 用量，便于核对一次生成的成本与质量。
 
 ### 自测与覆盖率
 

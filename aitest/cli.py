@@ -107,7 +107,7 @@ def cmd_generate(args) -> int:
 
     provider = get_provider(endpoints, prefer=args.provider, model=args.model)
     print("模型实现: %s" % provider.name
-          + ("  （未检测到 ANTHROPIC_API_KEY，使用离线 mock）"
+          + ("  （未检测到 DEEPSEEK_API_KEY / ANTHROPIC_API_KEY，使用离线 mock）"
              if provider.name == "mock" else ""))
 
     gen = CaseGenerator(provider=provider, knowledge=kb,
@@ -230,7 +230,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--knowledge", default=None, help="业务知识库 Markdown（缺省用内置）")
     b.add_argument("--out-dir", default="reports/ai")
     b.add_argument("--scaffold-dir", default=None, help="同时生成 pytest 骨架到该目录")
-    b.add_argument("--provider", default="auto", choices=["auto", "claude", "mock"])
+    b.add_argument("--provider", default="auto",
+                   choices=["auto", "deepseek", "claude", "mock"])
     b.add_argument("--model", default=None)
     b.add_argument("--max-cases", type=int, default=8)
     b.add_argument("--limit", type=int, default=None, help="只处理前 N 个接口（省调用）")
@@ -251,7 +252,8 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("analyze", help="对失败用例做归因（规则预筛 + 模型）")
     d.add_argument("--junit", required=True, help="pytest 的 junit xml 结果文件")
     d.add_argument("--out", default=None)
-    d.add_argument("--provider", default="auto", choices=["auto", "claude", "mock"])
+    d.add_argument("--provider", default="auto",
+                   choices=["auto", "deepseek", "claude", "mock"])
     d.set_defaults(func=cmd_analyze)
 
     e = sub.add_parser("report", help="输出覆盖度报告")
