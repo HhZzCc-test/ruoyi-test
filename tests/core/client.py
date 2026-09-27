@@ -101,40 +101,40 @@ class RuoyiApiClient:
         return f"{prefix}_{int(time.time())}_{random.randint(1000, 9999)}"
 
     def get_user_list(self, params=None):
-        return self._get("/system/user/list", headers=self.session.headers)
+        return self._get("/system/user/list", headers=self.session.headers, params=params)
 
     def get_user_by_id(self, user_id):
         return self._get(f"/system/user/{user_id}", headers=self.session.headers)
 
     def get_role_list(self, params=None):
-        return self._get("/system/role/list", headers=self.session.headers)
+        return self._get("/system/role/list", headers=self.session.headers, params=params)
 
     def get_role_by_id(self, role_id):
         return self._get(f"/system/role/{role_id}", headers=self.session.headers)
 
     def get_menu_list(self, params=None):
-        return self._get("/system/menu/list", headers=self.session.headers)
+        return self._get("/system/menu/list", headers=self.session.headers, params=params)
 
     def get_menu_tree(self):
         return self._get("/system/menu/treeselect", headers=self.session.headers)
 
     def get_dept_list(self, params=None):
-        return self._get("/system/dept/list", headers=self.session.headers)
+        return self._get("/system/dept/list", headers=self.session.headers, params=params)
 
     def get_post_list(self, params=None):
-        return self._get("/system/post/list", headers=self.session.headers)
+        return self._get("/system/post/list", headers=self.session.headers, params=params)
 
     def get_dict_type_list(self, params=None):
-        return self._get("/system/dict/type/list", headers=self.session.headers)
+        return self._get("/system/dict/type/list", headers=self.session.headers, params=params)
 
     def get_dict_data_list(self, params=None):
-        return self._get("/system/dict/data/list", headers=self.session.headers)
+        return self._get("/system/dict/data/list", headers=self.session.headers, params=params)
 
     def get_config_list(self, params=None):
-        return self._get("/system/config/list", headers=self.session.headers)
+        return self._get("/system/config/list", headers=self.session.headers, params=params)
 
     def get_notice_list(self, params=None):
-        return self._get("/system/notice/list", headers=self.session.headers)
+        return self._get("/system/notice/list", headers=self.session.headers, params=params)
     # ==================== 系统监控模块 ====================
 
     def get_online_list(self, params=None):

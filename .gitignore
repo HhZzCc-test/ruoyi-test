@@ -20,8 +20,11 @@ reports/
 failures/
 log/
 
-# 本地密钥
+# 本地密钥（绝不入库）
 .env
+.anthropic_key
+*.key
+*.pem
 
 # Allure
 allure-results/
