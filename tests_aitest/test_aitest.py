@@ -552,6 +552,51 @@ class TestDeepSeekProvider:
 # ----------------------------------------------------------------------
 class TestScaffold:
 
+    def test_render_with_client_map_is_syntactically_valid(self):
+        """★ 回归：带 client_map 的渲染路径也必须能编译。
+
+        这个用例是补的 —— 之前只有「不带 client_map」的语法测试，
+        结果带映射表生成的代码里漏了一个缩进前缀（IndentationError），
+        直到在真实环境收集阶段才炸出来。
+        """
+        from aitest.generator_pytest import load_client_map
+        endpoints = parse_swagger(load_spec(SPEC_PATH))
+        gen = CaseGenerator(provider=MockProvider(endpoints))
+        cases, _ = gen.generate(endpoints)
+        # 造出三种请求维度覆盖，确保每条分支都被渲染到
+        cases[0].header_overrides = {"Authorization": ""}
+        cases[1].header_overrides = {"Authorization": "InvalidToken",
+                                     "Content-Type": "text/plain"}
+        cases[2].method_override = "PUT"
+        cases[3].path_params = {"userId": 1}
+        cmap = load_client_map(os.path.join(ROOT, "specs", "ruoyi-client-map.json"))
+        for mod in ("system", "auth", "monitor"):
+            group = [c for c in cases if c.module == mod] or cases[:3]
+            src = render_module(group, mod, client_map=cmap)
+            compile(src, "<%s>" % mod, "exec")
+        # 真·映射表也能编译（含 pre / @运行时变量 / 参数名不一致等分支）
+        src = render_module(cases, "all", client_map=cmap)
+        compile(src, "<all>", "exec")
+
+    def test_client_map_falls_back_to_skip_when_unmapped(self):
+        """映射不到接口时必须显式 skip —— 不能 resp=None 空跑通过（那是假绿灯）。"""
+        from aitest.generator_pytest import load_client_map
+        endpoints = parse_swagger(load_spec(SPEC_PATH))
+        gen = CaseGenerator(provider=MockProvider(endpoints))
+        cases, _ = gen.generate(endpoints)
+        cmap = load_client_map(os.path.join(ROOT, "specs", "ruoyi-client-map.json"))
+        extra = TestCase(case_id="TC-X-001", title="未映射接口", endpoint="POST /no/such",
+                         case_type="normal", priority="P1",
+                         request_data={}, expected="x", assertions=["业务 code 为 200"])
+        src = render_module([extra], "x", client_map=cmap)
+        assert "pytest.skip(" in src, "未映射必须显式跳过"
+        assert "该接口在 client map 里没有映射" in src
+        # 不能出现真实调用行，也不能出现会「空跑通过」的 resp = None
+        assert not any(ln.strip().startswith("resp = self.client.")
+                       for ln in src.splitlines())
+        assert not any(ln.strip() == "resp = None" for ln in src.splitlines())
+        compile(src, "<unmapped>", "exec")
+
     def test_render_module_is_syntactically_valid(self):
         endpoints = parse_swagger(load_spec(SPEC_PATH))
         gen = CaseGenerator(provider=MockProvider(endpoints))

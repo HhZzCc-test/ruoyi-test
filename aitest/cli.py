@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 from aitest import __version__, case_rules
 from aitest.analyzer import FailureAnalyzer, render_report
 from aitest.generator import CaseGenerator, write_json, write_markdown
-from aitest.generator_pytest import render_all
+from aitest.generator_pytest import load_client_map, render_all
 from aitest.knowledge import KnowledgeBase, default_knowledge_base
 from aitest.llm import get_provider
 from aitest.models import TestCase
@@ -148,11 +148,22 @@ def cmd_scaffold(args) -> int:
     raw = payload.get("cases", payload if isinstance(payload, list) else [])
     cases = [TestCase.from_dict(d) for d in raw]
     cases = [c for c in cases if c.is_wellformed()]
+    client_map = load_client_map(args.client_map) if args.client_map else None
+    if client_map:
+        mapped = sum(1 for c in cases if c.endpoint in client_map)
+        print("客户端方法映射: %s（覆盖 %d/%d 条用例的接口）"
+              % (args.client_map, mapped, len(cases)))
+        print("  映射不到的接口仍生成骨架 + TODO，不会去猜方法名")
     print("载入用例: %d 条" % len(cases))
-    written = render_all(cases, args.out_dir, source=args.source)
+    written = render_all(cases, args.out_dir, source=args.source,
+                         client_map=client_map)
     for p in written:
         print("  写出 %s" % p)
-    print("\n提示：生成的是骨架，请求调用处需按实际 RuoyiApiClient 方法名对齐后再提交。")
+    if client_map:
+        print("\n提示：映射到的接口已生成可执行调用与断言；带 TODO 的方法需人工对齐后再提交。")
+    else:
+        print("\n提示：生成的是骨架，请求调用处需按实际 RuoyiApiClient 方法名对齐后再提交。")
+        print("      可用 --client-map specs/ruoyi-client-map.json 直接生成可执行代码。")
     return 0
 
 
@@ -255,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--cases", required=True)
     c.add_argument("--out-dir", required=True)
     c.add_argument("--source", default="aitest AI 草稿 + 人工评审")
+    c.add_argument("--client-map", default=None,
+                   help="接口到 RuoyiApiClient 方法的映射表(JSON)，给出后生成可执行代码")
     c.set_defaults(func=cmd_scaffold)
 
     d = sub.add_parser("analyze", help="对失败用例做归因（规则预筛 + 模型）")
