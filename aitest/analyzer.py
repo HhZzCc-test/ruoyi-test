@@ -10,13 +10,11 @@
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-from aitest.llm import LLMProvider, get_provider
+from aitest.llm import LLMProvider, extract_json, get_provider
 
 ISSUE_TYPES = ("case", "env", "product", "unknown")
 
@@ -139,7 +137,8 @@ class FailureAnalyzer:
             try:
                 raw = self.provider.complete(
                     SYSTEM, build_user_prompt(chunk), max_tokens=3000)
-                payload = json.loads(_strip_json(raw))
+                # 复用 llm.extract_json：与生成链路用同一套容错（代码块 / 前后解释）
+                payload = extract_json(raw)
             except Exception as e:
                 for f in chunk:
                     results.append(FailureItem(
@@ -179,17 +178,6 @@ class FailureAnalyzer:
             "summary": summary,
             "items": [r.to_dict() for r in results],
         }
-
-
-def _strip_json(text: str) -> str:
-    text = (text or "").strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
-    if fence:
-        text = fence.group(1).strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start >= 0 and end > start:
-        return text[start:end + 1]
-    return text
 
 
 def render_report(report: Dict[str, Any]) -> str:

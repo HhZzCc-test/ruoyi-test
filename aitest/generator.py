@@ -49,6 +49,10 @@ class GenerationStats:
     duration_sec: float = 0.0
     invalid_reasons: Dict[str, int] = field(default_factory=dict)
     files_written: List[str] = field(default_factory=list)
+    # 模型彻底失败（重试后仍拿不到 JSON）的接口，必须留下接口名而不是只留计数，
+    # 否则「哪个接口没生成」只能靠人工比对覆盖度报告反推
+    endpoints_failed: List[str] = field(default_factory=list)
+    endpoint_failure_reasons: Dict[str, str] = field(default_factory=dict)
 
     @property
     def usable_rate(self) -> float:
@@ -61,7 +65,7 @@ class GenerationStats:
         return d
 
     def summary(self) -> str:
-        return (
+        text = (
             "接口 %d 个，处理 %d 个；AI 草稿 %d 条（可用 %d / 不合格 %d / 去重 %d），"
             "最终用例 %d 条；模型调用 %d 次（失败 %d）；初稿可用率 %.1f%%；耗时 %.1fs"
             % (self.endpoints_total, self.endpoints_processed, self.cases_generated,
@@ -69,6 +73,9 @@ class GenerationStats:
                self.cases_final, self.llm_calls, self.llm_failures,
                self.usable_rate, self.duration_sec)
         )
+        if self.endpoints_failed:
+            text += "；未生成用例的接口 %d 个，需人工补写" % len(self.endpoints_failed)
+        return text
 
 
 class CaseGenerator:
@@ -107,10 +114,10 @@ class CaseGenerator:
                 stats.llm_failures += 1
                 payload = None
         if payload is None:
-            endpoint_note = TestCase(
-                case_id="", title="", endpoint=endpoint.key, case_type="normal",
-                diagnostics=["AI 调用失败: %s" % last_err[:120]])
-            endpoint_note.diagnostics.append("该接口未生成用例，需人工补写")
+            # 记下具体是哪个接口失败、失败原因是什么，而不只是加一个计数：
+            # 否则「哪些接口需要人工补写」只能靠人工比对覆盖度报告反推
+            stats.endpoints_failed.append(endpoint.key)
+            stats.endpoint_failure_reasons[endpoint.key] = last_err[:160]
             stats.invalid_reasons["llm_failed"] = stats.invalid_reasons.get("llm_failed", 0) + 1
             return []
 

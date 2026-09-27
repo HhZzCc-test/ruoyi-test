@@ -489,6 +489,46 @@ class TestCLI:
         assert rc == 0
         assert "接口覆盖" in capsys.readouterr().out
 
+    def test_show_prompt_is_dry_run(self, capsys):
+        from aitest.cli import main
+        rc = main(["generate", "--spec", SPEC_PATH, "--show-prompt", "--limit", "1"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        # 干跑必须在提示词里给出六段结构，且不产生任何模型调用
+        for block in ("## 一、待测接口", "## 二、业务背景",
+                      "## 三、约束", "## 六、输出要求"):
+            assert block in out, "提示词缺少 %s" % block
+        assert "干跑模式" in out
+
+    def test_extra_rules_reach_prompt(self, capsys):
+        from aitest.cli import main
+        rc = main(["generate", "--spec", SPEC_PATH, "--show-prompt", "--limit", "1",
+                   "--extra-rules", "必须覆盖并发提交同一单据的场景"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "## 四、额外要求" in out
+        assert "必须覆盖并发提交同一单据的场景" in out
+
+    def test_generate_reports_failed_endpoints(self, tmp_path, capsys, monkeypatch):
+        """模型彻底失败时必须留下接口名与原因，而不是只留一个计数。"""
+        from aitest.cli import main
+        from aitest.llm import MockProvider
+
+        def _boom(self, system, user, max_tokens=4000):
+            raise RuntimeError("模拟模型不可用")
+
+        monkeypatch.setattr(MockProvider, "complete", _boom)
+        out_dir = tmp_path / "ai"
+        rc = main(["generate", "--spec", SPEC_PATH, "--provider", "mock",
+                   "--out-dir", str(out_dir)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "需人工补写" in out and "POST /login" in out
+        stats = json.loads((out_dir / "cases.json").read_text(encoding="utf-8"))["stats"]
+        assert stats["cases_final"] == 0
+        assert len(stats["endpoints_failed"]) == 9
+        assert "模拟模型不可用" in stats["endpoint_failure_reasons"]["POST /login"]
+
     def test_analyze_subcommand(self, tmp_path, capsys):
         from aitest.cli import main
         junit = tmp_path / "report.xml"

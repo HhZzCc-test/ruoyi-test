@@ -3,10 +3,13 @@
 
     python -m aitest parse    --spec specs/ruoyi.json
     python -m aitest generate --spec specs/ruoyi.json --out-dir reports/ai
+    python -m aitest generate --spec specs/ruoyi.json --show-prompt --limit 1
     python -m aitest scaffold --cases reports/ai/cases.json --out-dir tests/ai
     python -m aitest analyze  --junit allure-results/report.xml --out reports/ai/failure_report.md
     python -m aitest report   --cases reports/ai/cases.json --spec specs/ruoyi.json
 
+`--show-prompt` 是干跑模式：只打印最终提示词全文，不调用模型；
+`--extra-rules` 可给单词生成追加「额外要求」（如「必须覆盖并发场景」）。
 无 API Key 时自动降级为 mock provider，整条流水线仍可跑通（便于离线与 CI）。
 """
 from __future__ import annotations
@@ -25,6 +28,7 @@ from aitest.generator_pytest import render_all
 from aitest.knowledge import KnowledgeBase, default_knowledge_base
 from aitest.llm import get_provider
 from aitest.models import TestCase
+from aitest.prompt_builder import build_prompt
 from aitest.swagger_parser import load_spec, parse_swagger
 
 
@@ -69,11 +73,37 @@ def cmd_parse(args) -> int:
     return 0
 
 
+def _preview_prompts(endpoints, kb: KnowledgeBase, include_fewshot: bool,
+                     extra_rules, limit=None) -> None:
+    """干跑：打印将要发给模型的提示词，不调用模型、不产生任何文件。
+
+    调提示词时最需要看的就是最终 system / user 全文，
+    但直接跑 generate 会白烧一次模型调用，所以单独给一个干跑入口。
+    """
+    targets = list(endpoints)[:limit] if limit else list(endpoints)
+    for ep in targets:
+        parts = build_prompt(ep, kb, include_fewshot=include_fewshot,
+                             extra_rules=extra_rules)
+        print("=" * 62)
+        print("接口: %s    知识库命中: %d 条" % (ep.key, parts.knowledge_hits))
+        print("-" * 62)
+        print("[system]\n%s" % parts.system)
+        print("-" * 62)
+        print("[user]\n%s" % parts.user)
+    print("\n共 %d 个接口。--show-prompt 为干跑模式：未调用模型、未生成用例。" % len(targets))
+
+
 def cmd_generate(args) -> int:
     endpoints = _load_endpoints(args.spec)
     kb: KnowledgeBase = (KnowledgeBase.from_markdown(args.knowledge)
                          if args.knowledge else default_knowledge_base())
     print("知识库: %s" % kb.stats())
+
+    extra_rules = tuple(args.extra_rules or ())
+    if args.show_prompt:
+        _preview_prompts(endpoints, kb, include_fewshot=not args.no_fewshot,
+                         extra_rules=extra_rules, limit=args.limit)
+        return 0
 
     provider = get_provider(endpoints, prefer=args.provider, model=args.model)
     print("模型实现: %s" % provider.name
@@ -83,13 +113,19 @@ def cmd_generate(args) -> int:
     gen = CaseGenerator(provider=provider, knowledge=kb,
                         max_cases_per_endpoint=args.max_cases,
                         retries=args.retries,
-                        include_fewshot=not args.no_fewshot)
+                        include_fewshot=not args.no_fewshot,
+                        extra_rules=extra_rules)
     cases, stats = gen.generate(endpoints, limit=args.limit)
 
     report = case_rules.coverage_report(cases, endpoints)
     print("\n" + stats.summary())
     print("-" * 62)
     print(case_rules.format_report(report))
+    if stats.endpoints_failed:
+        print("-" * 62)
+        print("以下接口未生成用例，需人工补写：")
+        for key in stats.endpoints_failed:
+            print("   - %s  (%s)" % (key, stats.endpoint_failure_reasons.get(key, "原因未知")))
 
     if args.out_dir:
         json_path = os.path.join(args.out_dir, "cases.json")
@@ -200,6 +236,10 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--limit", type=int, default=None, help="只处理前 N 个接口（省调用）")
     b.add_argument("--retries", type=int, default=1)
     b.add_argument("--no-fewshot", action="store_true")
+    b.add_argument("--show-prompt", action="store_true",
+                   help="干跑：只打印将要发给模型的提示词全文，不调用模型")
+    b.add_argument("--extra-rules", action="append", default=[],
+                   help="追加到提示词「额外要求」段的约束，可重复使用")
     b.set_defaults(func=cmd_generate)
 
     c = sub.add_parser("scaffold", help="由已评审用例生成 pytest 骨架")
