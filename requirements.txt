@@ -3,3 +3,12 @@ requests>=2.28.0
 allure-pytest>=2.13.0
 urllib3>=1.26.0
 redis>=4.0.0
+PyYAML>=6.0
+
+# aitest 模块（AI 辅助用例生成）依赖
+#   anthropic 仅在真实调用 Claude API 时需要；未安装或缺 Key 时
+#   aitest 会自动降级为离线 mock provider，CI 与本地开发无需 Key 也可跑通
+anthropic>=0.40.0
+
+# 覆盖率
+pytest-cov>=4.1.0

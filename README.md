@@ -35,7 +35,95 @@
 
 ---
 
-## 环境准备
+## AI 辅助用例生成（`aitest` 模块）
+
+把 [skills/api-test-skill.md](skills/api-test-skill.md) 里那套人工执行的 AI 工作流
+（Analyze → Design → Implement → Verify）工程化成**可重复运行的流水线**：
+
+```
+Swagger / OpenAPI ─► 接口元数据 ─► 业务知识库检索(RAG) ─► Claude 生成用例草稿
+                                                              │
+                     pytest 骨架 ◄── 规则去重/覆盖度校验 ◄──────┘
+                                                              │
+                                       失败归因（规则预筛 + 模型）◄── junit xml
+```
+
+### 设计要点
+
+| 要点 | 说明 |
+|---|---|
+| **AI 只出草稿** | 生成结果必须过 `case_rules.validate_case`（拦住「只断言 HTTP 200」这类假绿灯用例），再经人工评审才允许入库 |
+| **可插拔模型** | `LLMProvider` 协议 + `ClaudeProvider` + `MockProvider`；无 API Key 时自动降级为离线 mock，CI 与本地开发无需 Key |
+| **提示词四要素** | 业务背景（知识库检索）+ 约束 + 示例（few-shot）+ 输出要求（严格 JSON 契约），见 `prompt_builder.py` |
+| **归因分三类** | 失败结论区分 **用例问题 / 环境问题 / 真实缺陷**，且明确「结论是假设，需用日志复现确认」 |
+| **规则预筛省调用** | 连接拒绝、Redis 不可用、401 等一眼可见的环境问题走规则判定，不浪费模型调用 |
+
+### 目录结构
+
+```
+aitest/
+├── models.py            # Endpoint / TestCase / ParamSpec 数据模型
+├── swagger_parser.py    # OpenAPI 3.x 与 Swagger 2.0 解析（含 $ref 展开）
+├── knowledge.py         # 业务知识库 + 关键词加权检索（轻量 RAG）
+├── prompt_builder.py    # 提示词构建（四要素 + few-shot）
+├── prompts.py           # 系统角色与 JSON 输出契约
+├── llm.py               # ClaudeProvider / MockProvider / JSON 抽取
+├── case_rules.py        # 校验、去重、覆盖度报告
+├── generator.py         # 生成流水线 + 统计（草稿可用率等）
+├── generator_pytest.py  # pytest 骨架渲染
+├── analyzer.py          # 失败归因（规则预筛 + 模型）
+└── cli.py               # 命令行入口
+
+specs/ruoyi-openapi.json # 示例规格（节选自若依常用接口）
+tests_aitest/            # aitest 自身单测（离线可跑）
+tests_ai_generated/      # 生成的骨架示例（默认不纳入回归）
+```
+
+### 使用方式
+
+```bash
+pip install -r requirements.txt
+
+# 1) 解析接口文档，产出接口清单
+python -m aitest parse --spec specs/ruoyi-openapi.json
+
+# 2) 生成用例草稿（含规则校验、去重、覆盖度报告），并同时产出 pytest 骨架
+#    未设置 ANTHROPIC_API_KEY 时自动使用离线 mock
+python -m aitest generate --spec specs/ruoyi-openapi.json \
+    --out-dir reports/ai --scaffold-dir tests_ai_generated
+
+# 3) 用真实模型生成（需先设置 Key）
+export ANTHROPIC_API_KEY=sk-ant-xxx          # Windows: set ANTHROPIC_API_KEY=...
+python -m aitest generate --spec specs/ruoyi-openapi.json --provider claude
+
+# 4) 对失败用例做归因（输入 pytest 的 junit xml）
+python -m aitest analyze --junit examples/junit-sample.xml --provider claude \
+    --out reports/ai/failure_report.md
+
+# 5) 单独查看覆盖度
+python -m aitest report --cases reports/ai/cases.json --spec specs/ruoyi-openapi.json
+```
+
+生成产物：
+- `reports/ai/cases.json` —— 机器可读（含 `stats` 生成统计与 `coverage` 覆盖度）
+- `reports/ai/cases.md` —— 人工评审用（含评审要点提示）
+- `tests_ai_generated/*.py` —— pytest 骨架，请求调用处留有需人工对齐的断点
+
+### 自测与覆盖率
+
+```bash
+# aitest 模块单测（不需要若依服务与 API Key）
+python -m pytest tests_aitest -q
+
+# 覆盖率（实测约 90%）
+python -m pytest tests_aitest --cov=aitest --cov-report=term-missing
+```
+
+CI 见 [.github/workflows/ci.yml](.github/workflows/ci.yml)：`offline` 作业跑单测 + 生成自检，
+`coverage` 作业输出覆盖率报告并设 70% 门槛，`live` 作业留给需要真实服务的回归。
+
+---
+
 
 ### 1. 安装依赖
 
