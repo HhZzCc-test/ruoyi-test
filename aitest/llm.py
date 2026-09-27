@@ -35,6 +35,13 @@ DEFAULT_MODEL = os.environ.get("AITEST_MODEL", "claude-sonnet-4-5")
 DEFAULT_DEEPSEEK_MODEL = os.environ.get("AITEST_DEEPSEEK_MODEL", "deepseek-chat")
 DEFAULT_DEEPSEEK_BASE_URL = os.environ.get("AITEST_DEEPSEEK_BASE_URL",
                                            "https://api.deepseek.com")
+# 单次生成的最大输出 token。参数多、用例多的接口（如 POST /system/user）
+# 用 4000 会被截断，导致 JSON 不完整；8000 是实测够用的值，可用环境变量调整
+DEFAULT_MAX_TOKENS = int(os.environ.get("AITEST_MAX_TOKENS", "8000"))
+
+
+class OutputTruncated(RuntimeError):
+    """模型输出被 max_tokens 截断 —— JSON 必然不完整，重试时应放大预算。"""
 
 
 class LLMProvider(Protocol):
@@ -132,7 +139,7 @@ class DeepSeekProvider:
         self.json_mode = json_mode
         self._key = key
         self.usage: Dict[str, int] = {"calls": 0, "prompt_tokens": 0,
-                                      "completion_tokens": 0}
+                                      "completion_tokens": 0, "truncated": 0}
 
     # ------------------------------------------------------------------
     def _payload(self, system: str, user: str, max_tokens: int,
@@ -183,7 +190,16 @@ class DeepSeekProvider:
         choices = data.get("choices") or []
         if not choices:
             raise RuntimeError("DeepSeek 响应里没有 choices: %s" % str(data)[:200])
-        return str((choices[0].get("message") or {}).get("content") or "")
+        choice = choices[0] or {}
+        content = str((choice.get("message") or {}).get("content") or "")
+        # 真实模型在参数多/用例多的接口上会写超 max_tokens，
+        # 此时 JSON 一定不完整，必须报「截断」而不是让它去撞 JSON 解析错误
+        if str(choice.get("finish_reason") or "") == "length":
+            self.usage["truncated"] += 1
+            raise OutputTruncated(
+                "DeepSeek 输出被 max_tokens=%d 截断（finish_reason=length），"
+                "已生成 %d 字符但 JSON 不完整" % (max_tokens, len(content)))
+        return content
 
 
 class MockProvider:

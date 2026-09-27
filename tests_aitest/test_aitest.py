@@ -389,7 +389,8 @@ class TestDeepSeekProvider:
         out = p.complete("s", "u")
         assert out == '{"cases": [1]}'
         assert len(calls) == 1
-        assert p.usage == {"calls": 1, "prompt_tokens": 120, "completion_tokens": 30}
+        assert p.usage == {"calls": 1, "prompt_tokens": 120,
+                           "completion_tokens": 30, "truncated": 0}
         p.complete("s", "u")
         assert p.usage["calls"] == 2 and p.usage["prompt_tokens"] == 240
 
@@ -443,6 +444,44 @@ class TestDeepSeekProvider:
         p = get_provider()
         assert p.name == "deepseek"
         assert p.model == "deepseek-chat", "model=None 不能把默认模型顶掉"
+
+    def test_truncated_output_raises_output_truncated(self, monkeypatch):
+        """真实模型写超 max_tokens 时必须报「截断」，而不是让它去撞 JSON 解析错误。"""
+        from aitest.llm import OutputTruncated
+        p = self._provider()
+        monkeypatch.setattr(type(p), "_post", lambda self, payload: {
+            "choices": [{"finish_reason": "length",
+                         "message": {"content": '{"cases": [{"title": "被截断的'}}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 4000}})
+        with pytest.raises(OutputTruncated) as e:
+            p.complete("s", "u", max_tokens=4000)
+        assert "max_tokens=4000" in str(e.value)
+        assert p.usage["truncated"] == 1
+        assert p.usage["completion_tokens"] == 4000
+
+    def test_generator_doubles_budget_after_truncation(self):
+        """截断后重试要放大预算，而不是拿同一个预算原地再截一次。"""
+        from aitest.llm import OutputTruncated
+        budgets = []
+
+        class _TruncatingThenOk:
+            name = "fake"
+
+            def complete(self, system, user, max_tokens=4000):
+                budgets.append(max_tokens)
+                if len(budgets) == 1:
+                    raise OutputTruncated("被 max_tokens=%d 截断" % max_tokens)
+                return ('{"cases": [{"title": "正常场景", "case_type": "normal",'
+                        ' "priority": "P0", "expected": "业务 code 为 200",'
+                        ' "assertions": ["业务 code 为 200"]}]}')
+
+        endpoints = parse_swagger(load_spec(SPEC_PATH))
+        gen = CaseGenerator(provider=_TruncatingThenOk(), retries=1, max_tokens=4000)
+        cases, stats = gen.generate(endpoints, limit=1)
+        assert budgets == [4000, 8000], "第二次应给双倍预算"
+        assert stats.llm_truncated == 1
+        assert stats.llm_calls == 2 and stats.cases_final == 1
+        assert "截断" in stats.summary()
 
     def test_explicit_provider_does_not_silently_downgrade(self, monkeypatch):
         from aitest.llm import get_provider

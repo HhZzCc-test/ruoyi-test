@@ -14,7 +14,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from aitest import case_rules
 from aitest.knowledge import KnowledgeBase, default_knowledge_base
-from aitest.llm import LLMProvider, extract_json, get_provider
+from aitest.llm import (LLMProvider, OutputTruncated, DEFAULT_MAX_TOKENS,
+                        extract_json, get_provider)
 from aitest.models import Endpoint, TestCase
 from aitest.prompt_builder import build_prompt
 
@@ -50,6 +51,8 @@ class GenerationStats:
     # token 用量（provider 支持时记录，用于回答「跑一次多少钱」）
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # 因输出超长被截断而重试的次数（真实模型在参数多的接口上会出现）
+    llm_truncated: int = 0
     invalid_reasons: Dict[str, int] = field(default_factory=dict)
     files_written: List[str] = field(default_factory=list)
     # 模型彻底失败（重试后仍拿不到 JSON）的接口，必须留下接口名而不是只留计数，
@@ -78,6 +81,8 @@ class GenerationStats:
         )
         if self.endpoints_failed:
             text += "；未生成用例的接口 %d 个，需人工补写" % len(self.endpoints_failed)
+        if self.llm_truncated:
+            text += "；其中 %d 次因输出超长被截断并放大预算重试" % self.llm_truncated
         if self.prompt_tokens or self.completion_tokens:
             text += "；token 输入 %d / 输出 %d" % (self.prompt_tokens,
                                                   self.completion_tokens)
@@ -93,13 +98,15 @@ class CaseGenerator:
                  max_cases_per_endpoint: int = 8,
                  retries: int = 1,
                  include_fewshot: bool = True,
-                 extra_rules: Sequence[str] = ()):
+                 extra_rules: Sequence[str] = (),
+                 max_tokens: Optional[int] = None):
         self.provider = provider or get_provider(prefer="auto")
         self.knowledge = knowledge if knowledge is not None else default_knowledge_base()
         self.max_cases_per_endpoint = max_cases_per_endpoint
         self.retries = retries
         self.include_fewshot = include_fewshot
         self.extra_rules = tuple(extra_rules)
+        self.max_tokens = max_tokens or DEFAULT_MAX_TOKENS
 
     # ------------------------------------------------------------------
     def generate_for_endpoint(self, endpoint: Endpoint,
@@ -109,12 +116,22 @@ class CaseGenerator:
                              extra_rules=self.extra_rules)
         payload = None
         last_err = ""
+        budget = self.max_tokens
         for attempt in range(self.retries + 1):
             stats.llm_calls += 1
             try:
-                raw = self.provider.complete(parts.system, parts.user)
+                raw = self.provider.complete(parts.system, parts.user,
+                                             max_tokens=budget)
                 payload = extract_json(raw)
                 break
+            except OutputTruncated as e:
+                # 输出被截断（参数多的接口很常见）：下次给双倍预算再试，
+                # 而不是拿同一个预算原地重试 —— 那样只会再截断一次
+                last_err = str(e)
+                stats.llm_failures += 1
+                stats.llm_truncated += 1
+                payload = None
+                budget = min(budget * 2, 32000)
             except Exception as e:            # 网络异常 / JSON 解析失败都重试一次
                 last_err = str(e)
                 stats.llm_failures += 1

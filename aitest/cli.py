@@ -115,7 +115,8 @@ def cmd_generate(args) -> int:
                         max_cases_per_endpoint=args.max_cases,
                         retries=args.retries,
                         include_fewshot=not args.no_fewshot,
-                        extra_rules=extra_rules)
+                        extra_rules=extra_rules,
+                        max_tokens=args.max_tokens)
     cases, stats = gen.generate(endpoints, limit=args.limit)
 
     report = case_rules.coverage_report(cases, endpoints)
@@ -241,6 +242,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--max-cases", type=int, default=8)
     b.add_argument("--limit", type=int, default=None, help="只处理前 N 个接口（省调用）")
     b.add_argument("--retries", type=int, default=1)
+    b.add_argument("--max-tokens", type=int, default=None,
+                   help="单次生成的最大输出 token（默认 8000；截断时会自动放大预算重试）")
     b.add_argument("--no-fewshot", action="store_true")
     b.add_argument("--show-prompt", action="store_true",
                    help="干跑：只打印将要发给模型的提示词全文，不调用模型")
