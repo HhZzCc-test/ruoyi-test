@@ -16,6 +16,13 @@ htmlcov/
 # aitest 生成产物（可复现，不入库）
 reports/
 
+# 失败现场与日志
+failures/
+log/
+
+# 本地密钥
+.env
+
 # Allure
 allure-results/
 allure-report/
