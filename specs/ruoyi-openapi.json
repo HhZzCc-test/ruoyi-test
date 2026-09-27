@@ -1,0 +1,267 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "若依管理系统 - 精简 OpenAPI 规格（供 aitest 演示与自测）",
+    "version": "1.0.0",
+    "description": "节选自若依（RuoYi）后台系统常用接口，用于验证 aitest 的解析与用例生成能力。"
+  },
+  "servers": [{ "url": "http://localhost:18080" }],
+  "components": {
+    "schemas": {
+      "LoginBody": {
+        "type": "object",
+        "required": ["username", "password", "code", "uuid"],
+        "properties": {
+          "username": { "type": "string", "description": "登录账号", "maxLength": 30 },
+          "password": { "type": "string", "description": "登录密码", "maxLength": 20 },
+          "code": { "type": "string", "description": "验证码", "maxLength": 4 },
+          "uuid": { "type": "string", "description": "验证码唯一标识" }
+        }
+      },
+      "UserBody": {
+        "type": "object",
+        "required": ["userName", "password"],
+        "properties": {
+          "userName": { "type": "string", "description": "用户账号", "maxLength": 30, "minLength": 2 },
+          "nickName": { "type": "string", "description": "用户昵称", "maxLength": 30 },
+          "password": { "type": "string", "description": "密码", "minLength": 5, "maxLength": 20 },
+          "phonenumber": { "type": "string", "description": "手机号", "maxLength": 11 },
+          "email": { "type": "string", "description": "邮箱", "maxLength": 50 },
+          "status": { "type": "string", "description": "状态", "enum": ["0", "1"] },
+          "deptId": { "type": "integer", "description": "部门ID" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/captchaImage": {
+      "get": {
+        "summary": "获取验证码",
+        "operationId": "captchaImage",
+        "tags": ["认证"],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "integer" },
+                    "uuid": { "type": "string" },
+                    "img": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/login": {
+      "post": {
+        "summary": "用户登录",
+        "operationId": "login",
+        "tags": ["认证"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/LoginBody" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "integer" },
+                    "msg": { "type": "string" },
+                    "token": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/getInfo": {
+      "get": {
+        "summary": "获取当前登录用户信息",
+        "operationId": "getInfo",
+        "tags": ["认证"],
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "integer" },
+                    "user": { "type": "object" },
+                    "roles": { "type": "array" },
+                    "permissions": { "type": "array" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/user/list": {
+      "get": {
+        "summary": "查询用户列表",
+        "operationId": "userList",
+        "tags": ["系统管理-用户"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "pageNum", "in": "query", "required": false, "type": "integer", "minimum": 1, "description": "页码" },
+          { "name": "pageSize", "in": "query", "required": false, "type": "integer", "minimum": 1, "maximum": 1000, "description": "每页条数" },
+          { "name": "userName", "in": "query", "required": false, "type": "string", "maxLength": 30, "description": "用户账号" },
+          { "name": "status", "in": "query", "required": false, "type": "string", "enum": ["0", "1"], "description": "状态" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "integer" },
+                    "total": { "type": "integer" },
+                    "rows": { "type": "array" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/user": {
+      "post": {
+        "summary": "新增用户",
+        "operationId": "addUser",
+        "tags": ["系统管理-用户"],
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/UserBody" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "code": { "type": "integer" }, "msg": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/user/{userId}": {
+      "get": {
+        "summary": "按ID查询用户详情",
+        "operationId": "getUser",
+        "tags": ["系统管理-用户"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "type": "integer", "description": "用户ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "code": { "type": "integer" }, "data": { "type": "object" } }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除用户",
+        "operationId": "removeUser",
+        "tags": ["系统管理-用户"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "type": "integer", "description": "用户ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "code": { "type": "integer" }, "msg": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/monitor/cache/getNames": {
+      "get": {
+        "summary": "获取缓存名称列表",
+        "operationId": "cacheNames",
+        "tags": ["系统监控-缓存"],
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "code": { "type": "integer" }, "data": { "type": "array" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/monitor/job/{jobId}": {
+      "delete": {
+        "summary": "删除定时任务",
+        "operationId": "removeJob",
+        "tags": ["系统监控-定时任务"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "jobId", "in": "path", "required": true, "type": "integer", "description": "任务ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "code": { "type": "integer" }, "msg": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
