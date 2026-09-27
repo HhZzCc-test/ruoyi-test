@@ -105,7 +105,8 @@ def cmd_generate(args) -> int:
                          extra_rules=extra_rules, limit=args.limit)
         return 0
 
-    provider = get_provider(endpoints, prefer=args.provider, model=args.model)
+    provider = get_provider(endpoints, prefer=args.provider, model=args.model,
+                            base_url=args.base_url)
     print("模型实现: %s" % provider.name
           + ("  （未检测到 DEEPSEEK_API_KEY / ANTHROPIC_API_KEY，使用离线 mock）"
              if provider.name == "mock" else ""))
@@ -187,7 +188,9 @@ def cmd_analyze(args) -> int:
     if not failures:
         print("没有失败用例，无需归因。")
         return 0
-    analyzer = FailureAnalyzer(provider=get_provider(prefer=args.provider))
+    analyzer = FailureAnalyzer(provider=get_provider(prefer=args.provider,
+                                                     model=args.model,
+                                                     base_url=args.base_url))
     report = analyzer.analyze(failures)
     text = render_report(report)
     print("\n" + "-" * 62)
@@ -233,6 +236,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--provider", default="auto",
                    choices=["auto", "deepseek", "claude", "mock"])
     b.add_argument("--model", default=None)
+    b.add_argument("--base-url", default=None,
+                   help="自定义模型网关地址（第三方 OpenAI 兼容网关，如硅基流动/火山方舟）")
     b.add_argument("--max-cases", type=int, default=8)
     b.add_argument("--limit", type=int, default=None, help="只处理前 N 个接口（省调用）")
     b.add_argument("--retries", type=int, default=1)
@@ -254,6 +259,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--out", default=None)
     d.add_argument("--provider", default="auto",
                    choices=["auto", "deepseek", "claude", "mock"])
+    d.add_argument("--model", default=None)
+    d.add_argument("--base-url", default=None, help="自定义模型网关地址")
     d.set_defaults(func=cmd_analyze)
 
     e = sub.add_parser("report", help="输出覆盖度报告")

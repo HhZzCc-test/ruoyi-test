@@ -324,7 +324,8 @@ class MockProvider:
 
 def get_provider(endpoints: Optional[List[Endpoint]] = None,
                  prefer: str = "auto",
-                 model: Optional[str] = None) -> LLMProvider:
+                 model: Optional[str] = None,
+                 base_url: Optional[str] = None) -> LLMProvider:
     """选择可用的大模型实现。
 
     prefer: ``auto`` | ``deepseek`` | ``claude`` | ``mock``
@@ -334,21 +335,23 @@ def get_provider(endpoints: Optional[List[Endpoint]] = None,
     - ``auto`` 按「谁配了 Key 用谁」选择，DeepSeek 优先（成本低、国内可达）；
       都没配则降级为离线 mock，保证 CI 与本地开发可跑通
     - ``model`` 为 None 时各 provider 用自己的默认模型名（不要把 None 传下去）
+    - ``base_url`` 用于第三方 OpenAI 兼容网关（硅基流动 / 火山方舟 / 自建中转等），
+      不传则用各家官方地址
     """
     if prefer == "mock":
         return MockProvider(endpoints)
     if prefer == "deepseek":
-        return DeepSeekProvider(model=model)
+        return DeepSeekProvider(model=model, base_url=base_url)
     if prefer == "claude":
-        return ClaudeProvider(model=model or DEFAULT_MODEL)
+        return ClaudeProvider(model=model or DEFAULT_MODEL, base_url=base_url)
     if os.environ.get("DEEPSEEK_API_KEY"):
         try:
-            return DeepSeekProvider(model=model)
+            return DeepSeekProvider(model=model, base_url=base_url)
         except Exception:
             pass
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
-            return ClaudeProvider(model=model or DEFAULT_MODEL)
+            return ClaudeProvider(model=model or DEFAULT_MODEL, base_url=base_url)
         except Exception:
             pass
     return MockProvider(endpoints)

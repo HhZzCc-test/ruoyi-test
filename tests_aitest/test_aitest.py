@@ -450,6 +450,28 @@ class TestDeepSeekProvider:
         with pytest.raises(RuntimeError):
             get_provider(prefer="deepseek")
 
+    def test_base_url_and_model_pass_through(self, monkeypatch):
+        """第三方 OpenAI 兼容网关：base_url / model 必须能透传给 provider。"""
+        from aitest.llm import get_provider
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        p = get_provider(prefer="deepseek", model="deepseek-v3",
+                         base_url="https://api.siliconflow.cn/v1")
+        assert p.model == "deepseek-v3"
+        assert p.base_url == "https://api.siliconflow.cn/v1"
+        # 未指定时退回各自默认值
+        q = get_provider(prefer="deepseek")
+        assert q.model == "deepseek-chat"
+        assert q.base_url == "https://api.deepseek.com"
+
+    def test_cli_accepts_base_url(self, capsys, monkeypatch):
+        from aitest.cli import main
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        # 干跑模式不会真的联网，只用它验证参数能被解析并传入 provider
+        rc = main(["generate", "--spec", SPEC_PATH, "--show-prompt", "--limit", "1",
+                   "--provider", "deepseek", "--model", "deepseek-v3",
+                   "--base-url", "https://api.siliconflow.cn/v1"])
+        assert rc == 0
+
 
 # ----------------------------------------------------------------------
 # pytest 骨架生成
